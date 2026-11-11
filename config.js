@@ -4,17 +4,14 @@
 // Firebase console → Project settings → General → Your apps → Web app → "SDK setup and configuration" (Config).
 // These values are not secret; access is controlled by the Firestore security rules (see README).
 
-window.FIREBASE_CONFIG = null;
-/* Example:
 window.FIREBASE_CONFIG = {
-  apiKey: "AIza...",
-  authDomain: "your-project.firebaseapp.com",
-  projectId: "your-project",
-  storageBucket: "your-project.appspot.com",
-  messagingSenderId: "1234567890",
-  appId: "1:1234567890:web:abcdef"
+  apiKey: "AIzaSyAPmHqhTeIaK5Jzi7QIJJN5-CX7j-rQIRA",
+  authDomain: "football-1c132.firebaseapp.com",
+  projectId: "football-1c132",
+  storageBucket: "football-1c132.firebasestorage.app",
+  messagingSenderId: "954615218087",
+  appId: "1:954615218087:web:0e7ec08692d5c1d1340082"
 };
-*/
 
 // Name of the document that holds the team's data.
 window.TEAM_DOC = 'team-9218';
