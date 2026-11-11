@@ -99,7 +99,16 @@ function load() {
   return seed();
 }
 let saveTimer;
-function save() { clearTimeout(saveTimer); saveTimer = setTimeout(persistNow, 200); }
+function save() {
+  if (!canEdit()) { revertViewerChange(); return; }
+  clearTimeout(saveTimer); saveTimer = setTimeout(persistNow, 200);
+}
+// a viewer somehow changed something: restore the cloud copy and redraw
+function revertViewerChange() {
+  try { db = cloud.lastJson ? normalize(JSON.parse(cloud.lastJson)) : load(); } catch (e) { db = load(); }
+  toast('רק המנהל יכול לשנות את זה');
+  render();
+}
 function persistNow() {
   saveTimer = null;
   try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); if (!cloud.on) setStatus('✓ נשמר במחשב'); }
@@ -755,7 +764,18 @@ function importData(file) {
   };
   fr.readAsText(file);
 }
+function renderSquadReadonly(main) {
+  main.append(el('div', { class: 'page-head' }, el('h2', {}, 'סגל ' + db.team.name)));
+  main.append(el('section', { class: 'card' },
+    el('div', { class: 'table-wrap' }, el('table', {},
+      el('thead', {}, el('tr', {}, el('th', {}, 'מס׳'), el('th', { class: 'name' }, 'שם'), el('th', {}, ''))),
+      el('tbody', {}, roster().slice().sort((a, b) => (parseInt(a.num, 10) || 999) - (parseInt(b.num, 10) || 999)).map(p => el('tr', {},
+        el('td', {}, p.num || '–'),
+        el('td', { class: 'name' }, p.name),
+        el('td', {}, p.gk ? el('span', { class: 'tag' }, 'שוער') : null, p.foreign ? el('span', { class: 'tag', style: 'margin-inline-start:4px' }, 'זר') : null))))))));
+}
 function renderSquad(main) {
+  if (!canEdit()) return renderSquadReadonly(main);
   main.append(el('div', { class: 'page-head' }, el('h2', {}, 'סגל הקבוצה')));
   main.append(el('section', { class: 'card' },
     el('label', { class: 'field', style: 'max-width:320px' }, 'שם הקבוצה',

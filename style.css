@@ -232,7 +232,7 @@ button.slot:hover { border: none; }
 .status + .auth { margin-inline-start: 4px; }
 .ro-banner { background: #eef3ff; border: 1px solid #c9d6f5; color: #2b3f9a; border-radius: 10px; padding: 9px 12px; font-size: 14px; margin-bottom: 14px; }
 body.readonly .w { display: none !important; }
-body.readonly main input:not(.ro-ok), body.readonly main select:not(.ro-ok), body.readonly .w-click, body.readonly .pitch.clickable { pointer-events: none; }
+body.readonly main input:not(.ro-ok), body.readonly main select:not(.ro-ok), body.readonly main label, body.readonly .w-click, body.readonly .pitch.clickable { pointer-events: none; }
 body.readonly main input:not([type=checkbox]):not([type=radio]) { background: #f7f8f5; }
 .topbar nav .ic { display: none; }
 
