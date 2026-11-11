@@ -7,9 +7,9 @@ A web app for managing a 7-a-side football team. It is organised in rounds: each
 ## Features
 
 - **Squad**: full name, shirt name, number, foreign-player tag and a fixed goalkeeper who is placed in goal automatically.
-- **Rounds (מחזורים)**: mark who is coming for the whole round, then add as many games as you need.
-- **Games**: one lineup per game with a subs bench ("second option"). Games are shown side by side, and there are 4 formations (3-2-1, 2-3-1, 3-1-2, 2-2-2).
-- **Round warnings**: shows attending players who didn't start any game, players not used at all, and incomplete lineups. While you edit, the editor shows how many times each player has already started in the round.
+- **Rounds (מחזורים)**: numbered rounds. Players mark for themselves whether they're coming, without logging in, and the manager adds games.
+- **Games**: each game has a game number and an opponent, and games are sorted by number automatically. Each game has one lineup with a subs bench ("second option"). Games are shown side by side, and there are 4 formations (3-2-1, 2-3-1, 3-1-2, 2-2-2).
+- **Round warnings**: shows attending players who didn't start any game, players not used at all, and incomplete lineups. While you edit, the editor shows how many times each player has already started or been a sub in the round.
 - **After the game**: score, goals, assists, yellow/red cards and MVP for each game.
 - **Season table**: rounds attended, games played, starts, sub appearances, goals, assists, cards and MVP. You can sort by any column.
 - **Sharing**: WhatsApp-ready text, a direct WhatsApp link, and a PNG image of one game or of a whole round.
@@ -28,15 +28,26 @@ Until this is done the app works but saves only in the current browser.
    rules_version = '2';
    service cloud.firestore {
      match /databases/{database}/documents {
+       function isAdmin() {
+         return request.auth != null && request.auth.token.email in ['YOUR_EMAIL@gmail.com'];
+       }
        match /teams/{teamId} {
          allow read: if true;
-         allow write: if request.auth != null
-           && request.auth.token.email in ['YOUR_EMAIL@gmail.com'];
+         allow write: if isAdmin();
+         // players mark attendance without signing in
+         match /rsvp/{id} {
+           allow read: if true;
+           allow create, update: if request.resource.data.keys().hasOnly(['round', 'player', 'coming', 'at'])
+             && request.resource.data.coming is bool
+             && id == request.resource.data.round + '_' + request.resource.data.player;
+           allow delete: if isAdmin();
+         }
        }
      }
    }
    ```
-   To give more people edit rights, add their emails to the list. To make the data private, change `allow read: if true` to `allow read: if request.auth != null`.
+   Only the email(s) in `isAdmin` can manage rounds, games, lineups and stats. Anyone with the link can view and mark attendance, so the app trusts each player to mark only himself.
+
 4. **Build → Authentication → Get started → Sign-in method → Google → Enable**.
 5. **Authentication → Settings → Authorized domains → Add domain**: `elnatan-lazar.github.io`.
 6. **Project settings (⚙) → General → Your apps → Web (`</>`)**: register an app, then copy the `firebaseConfig` object into `config.js` as `window.FIREBASE_CONFIG = { ... }`.

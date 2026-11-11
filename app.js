@@ -36,18 +36,19 @@ function seed() {
     ['יובל אזוגי', 'אזוגי', '30'], ['בניה צוקרמן', 'בניה', '92'], ['מאור', 'מאור', '77'],
   ];
   const players = raw.map((r, i) => ({ id: 'p' + (i + 1), name: r[0], short: r[1], num: r[2], foreign: !!r[3], gk: !!r[4] }));
-  const G = (id, name, slots) => ({ id, name, opponent: '', lineup: { formation: '3-2-1', slots, subs: [] }, result: { us: '', them: '' }, stats: {}, mvp: null });
+  const G = (id, num, slots) => ({ id, num, opponent: '', lineup: { formation: '3-2-1', slots, subs: [] }, result: { us: '', them: '' }, stats: {}, mvp: null });
+  const coming = ['p10', 'p23', 'p16', 'p7', 'p6', 'p1', 'p11', 'p24', 'p14', 'p9', 'p5', 'p22', 'p15', 'p18', 'p8', 'p20', 'p21', 'p12'];
   return {
-    version: 2,
+    version: 3,
     team: { name: 'גדוד 9218' },
     players,
     rounds: [{
-      id: 'r1', name: 'מחזור 1', date: '',
-      attending: ['p10', 'p23', 'p16', 'p7', 'p6', 'p1', 'p11', 'p24', 'p14', 'p9', 'p5', 'p22', 'p15', 'p18', 'p8', 'p20', 'p21', 'p12'],
+      id: 'r1', num: 1, date: '',
+      rsvp: Object.fromEntries(coming.map(id => [id, true])),
       games: [
-        G('g1', 'משחק 1', ['p21', 'p18', 'p12', 'p16', 'p11', 'p24', 'p22']),
-        G('g2', 'משחק 2', ['p21', 'p23', null, 'p8', 'p11', 'p7', 'p22']),
-        G('g3', 'משחק 3', ['p21', 'p6', 'p15', 'p10', 'p14', 'p1', 'p9']),
+        G('g1', 1, ['p21', 'p18', 'p12', 'p16', 'p11', 'p24', 'p22']),
+        G('g2', 2, ['p21', 'p23', null, 'p8', 'p11', 'p7', 'p22']),
+        G('g3', 3, ['p21', 'p6', 'p15', 'p10', 'p14', 'p1', 'p9']),
       ],
     }],
   };
@@ -75,12 +76,21 @@ function normalize(d) {
     }));
     delete d.games;
   }
-  d.version = 2;
+  d.version = 3;
   d.team = d.team || { name: 'הקבוצה שלי' };
   d.players.forEach(p => { p.num = p.num == null ? '' : String(p.num); p.short = p.short || p.name; });
-  d.rounds.forEach(r => {
-    r.attending = r.attending || []; r.games = r.games || []; r.name = r.name || 'מחזור';
-    r.games.forEach(g => { g.lineup = fixLineup(g.lineup); g.result = g.result || { us: '', them: '' }; g.stats = g.stats || {}; g.mvp = g.mvp || null; g.opponent = g.opponent || ''; });
+  const numFrom = (txt, fallback) => { const m = String(txt || '').match(/\d+/); return m ? +m[0] : fallback; };
+  d.rounds.forEach((r, ri) => {
+    if (r.num == null) r.num = numFrom(r.name, ri + 1);
+    if (!r.rsvp) r.rsvp = Object.fromEntries((r.attending || []).map(id => [id, true]));
+    delete r.attending; delete r.name;
+    r.games = r.games || [];
+    r.games.forEach((g, gi) => {
+      if (g.num == null) g.num = numFrom(g.name, gi + 1);
+      delete g.name;
+      g.lineup = fixLineup(g.lineup); g.result = g.result || { us: '', them: '' }; g.stats = g.stats || {}; g.mvp = g.mvp || null; g.opponent = g.opponent || '';
+    });
+    sortGames(r);
   });
   return d;
 }
@@ -126,8 +136,30 @@ function el(tag, props, ...kids) {
   return e;
 }
 function fmtDate(d) { if (!d) return 'ללא תאריך'; const [y, m, dd] = d.split('-'); return `${+dd}/${+m}/${y}`; }
-function gameLabel(g) { return g.name + (g.opponent.trim() ? ' נגד ' + g.opponent.trim() : ''); }
-function sortedRounds() { return db.rounds.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')); }
+function gameName(g) { return 'משחק ' + g.num; }
+function gameLabel(g) { return gameName(g) + (g.opponent.trim() ? ' נגד ' + g.opponent.trim() : ''); }
+function roundTitle(r) { return 'מחזור ' + r.num; }
+function sortGames(r) { r.games.sort((a, b) => (a.num - b.num) || 0); }
+function nextNum(list) { return list.reduce((m, x) => Math.max(m, +x.num || 0), 0) + 1; }
+function sortedRounds() { return db.rounds.slice().sort((a, b) => (b.num - a.num) || (b.date || '').localeCompare(a.date || '')); }
+// attendance: true = coming, false = not coming, undefined = no answer
+function rsvpOf(r) { return Object.assign({}, r.rsvp || {}, cloud.on ? (cloud.rsvp[r.id] || {}) : {}); }
+function att(r) { const m = rsvpOf(r); return roster().map(p => p.id).filter(id => m[id] === true); }
+async function setRsvp(r, ids, val) {
+  if (cloud.on && cloud.ref) {
+    const map = cloud.rsvp[r.id] = cloud.rsvp[r.id] || {};
+    ids.forEach(id => { map[id] = val; });
+    render();
+    try {
+      const batch = firebase.firestore().batch();
+      ids.forEach(id => batch.set(cloud.ref.collection('rsvp').doc(r.id + '_' + id), { round: r.id, player: id, coming: val, at: firebase.firestore.FieldValue.serverTimestamp() }));
+      await batch.commit();
+      setStatus('☁ נשמר');
+    } catch (e) { toast('הסימון לא נשמר – נסה שוב'); }
+  } else {
+    r.rsvp = r.rsvp || {}; ids.forEach(id => { r.rsvp[id] = val; }); save(); render();
+  }
+}
 function resultOf(g) {
   const u = parseInt(g.result && g.result.us, 10), t = parseInt(g.result && g.result.them, 10);
   if (isNaN(u) || isNaN(t)) return null;
@@ -182,19 +214,19 @@ function roundWarnings(r) {
   const w = [];
   if (!r.games.length) return w;
   const u = usageOf(r.games);
-  const att = r.attending.filter(byId);
-  const notIn = att.filter(id => !u[id]);
-  const subsOnly = att.filter(id => u[id] && !u[id].s);
+  const coming = att(r);
+  const notIn = coming.filter(id => !u[id]);
+  const subsOnly = coming.filter(id => u[id] && !u[id].s);
   if (notIn.length) w.push({ lvl: 'bad', text: `לא שובצו באף משחק, לא בהרכב ולא בחילופים (${notIn.length}): ${names(notIn)}` });
   if (subsOnly.length) w.push({ lvl: 'warn', text: `לא פתחו באף משחק, רק בחילופים (${subsOnly.length}): ${names(subsOnly)}` });
-  const notAtt = Object.keys(u).filter(id => !r.attending.includes(id));
+  const notAtt = Object.keys(u).filter(id => !coming.includes(id));
   if (notAtt.length) w.push({ lvl: 'warn', text: `משובצים אבל לא מסומנים כמגיעים: ${names(notAtt)}` });
-  r.games.forEach(g => { const n = g.lineup.slots.filter(id => id && byId(id)).length; if (n < 7) w.push({ lvl: 'warn', text: `${g.name}: חסרים ${7 - n} שחקנים על המגרש` }); });
+  r.games.forEach(g => { const n = g.lineup.slots.filter(id => id && byId(id)).length; if (n < 7) w.push({ lvl: 'warn', text: `${gameLabel(g)}: חסרים ${7 - n} שחקנים על המגרש` }); });
   return w;
 }
 
 /* ---------------- WhatsApp text ---------------- */
-function roundHeader(r) { return `⚽ *${db.team.name}* | ${r.name}` + (r.date ? ` | ${fmtDate(r.date)}` : ''); }
+function roundHeader(r) { return `⚽ *${db.team.name}* | ${roundTitle(r)}` + (r.date ? ` | ${fmtDate(r.date)}` : ''); }
 function gameText(r, g, withHeader) {
   const l = g.lineup, f = FORMATIONS[l.formation], lines = [];
   if (withHeader) lines.push(roundHeader(r), '');
@@ -253,7 +285,7 @@ function pitchEl(l, opts = {}) {
    Anyone with the link can view; signed-in editors can write
    (enforced by Firestore security rules, see README).
    ========================================================= */
-const cloud = { on: false, ready: false, missing: false, user: null, denied: false, ref: null, lastJson: null };
+const cloud = { on: false, ready: false, missing: false, user: null, denied: false, ref: null, lastJson: null, rsvp: {} };
 function canEdit() { return !cloud.on || (!!cloud.user && cloud.ready && !cloud.denied); }
 function applyMode() {
   document.body.classList.toggle('readonly', !canEdit());
@@ -297,6 +329,13 @@ async function initCloud() {
       setStatus(first ? '☁ מחובר לענן' : '☁ עודכן מהענן');
     } catch (e) { /* ignore malformed */ }
   }, err => { setStatus('⚠ שגיאת חיבור לענן', true); console.warn(err); });
+  // attendance marks live in their own documents so players can write them without signing in
+  cloud.ref.collection('rsvp').onSnapshot(qs => {
+    const map = {};
+    qs.forEach(d => { const x = d.data(); if (x && x.round && x.player) (map[x.round] = map[x.round] || {})[x.player] = !!x.coming; });
+    cloud.rsvp = map;
+    render(); if (editing) renderEditor();
+  }, err => console.warn(err));
 }
 let pushT;
 function cloudPush() {
@@ -332,7 +371,7 @@ function renderAuth() {
   if (cloud.user) {
     box.append(el('span', { class: 'who', title: cloud.user.email || '' }, '👤 ' + ((cloud.user.displayName || cloud.user.email || '').split(' ')[0])),
       el('button', { class: 'small ghost', onclick: () => firebase.auth().signOut() }, 'התנתק'));
-  } else box.append(el('button', { class: 'small light', onclick: signIn }, 'התחבר'));
+  } else box.append(el('button', { class: 'small light', onclick: signIn }, 'כניסת מנהל'));
 }
 
 /* =========================================================
@@ -346,7 +385,7 @@ function render() {
   const main = $('#view');
   main.innerHTML = '';
   renderAuth();
-  if (cloud.on && !canEdit()) main.append(el('div', { class: 'ro-banner' }, cloud.denied ? '👀 מצב צפייה: לחשבון הזה אין הרשאת עריכה' : cloud.ready ? '👀 מצב צפייה. כדי לערוך לחץ "התחבר" למעלה' : '☁ טוען נתונים מהענן…'));
+  if (cloud.on && !canEdit()) main.append(el('div', { class: 'ro-banner' }, cloud.denied ? '👀 מצב צפייה: לחשבון הזה אין הרשאת עריכה' : cloud.ready ? '👀 מצב צפייה: אפשר לראות הרכבים וסטטיסטיקה ולסמן הגעה למחזור' : '☁ טוען נתונים מהענן…'));
   if (h.startsWith('round-')) { const r = roundById(h.slice(6)); if (r) return renderRound(main, r); location.hash = 'rounds'; return; }
   if (h === 'stats') return renderStats(main);
   if (h === 'squad') return renderSquad(main);
@@ -356,7 +395,7 @@ window.addEventListener('hashchange', () => { if (editing) closeEditor(); closeM
 
 /* ---------------- rounds list ---------------- */
 function newRound() {
-  const r = { id: uid('r'), name: 'מחזור ' + (db.rounds.length + 1), date: new Date().toISOString().slice(0, 10), attending: roster().map(p => p.id), games: [] };
+  const r = { id: uid('r'), num: nextNum(db.rounds), date: new Date().toISOString().slice(0, 10), rsvp: {}, games: [] };
   db.rounds.push(r); ui.attOpen[r.id] = true; save();
   location.hash = 'round-' + r.id;
 }
@@ -372,8 +411,8 @@ function renderRounds(main) {
   main.append(el('div', { class: 'game-list' }, sortedRounds().map(r => {
     const w = roundWarnings(r), rec = roundRecord(r);
     return el('a', { class: 'game-card', href: '#round-' + r.id },
-      el('div', { class: 'gc-top' }, el('span', { class: 'gc-title' }, r.name), rec ? el('span', { class: 'muted small' }, rec) : null),
-      el('div', { class: 'gc-meta' }, `${fmtDate(r.date)} · ${r.games.length} משחקים · ${r.attending.filter(byId).length} מגיעים`),
+      el('div', { class: 'gc-top' }, el('span', { class: 'gc-title' }, roundTitle(r)), rec ? el('span', { class: 'muted small' }, rec) : null),
+      el('div', { class: 'gc-meta' }, `${fmtDate(r.date)} · ${r.games.length} משחקים · ${att(r).length} מגיעים`),
       r.games.length ? el('div', { class: 'gc-games' }, r.games.map(g => el('span', { class: 'gc-game' }, gameLabel(g), resultBadge(g)))) : null,
       w.length ? el('div', { class: 'gc-warn' }, `⚠ ${w.length} אזהרות`) : null);
   })));
@@ -386,7 +425,7 @@ function renderRound(main, r) {
   // details + share
   main.append(el('section', { class: 'card' },
     el('div', { class: 'game-fields' },
-      el('label', { class: 'field' }, 'שם המחזור', el('input', { value: r.name, oninput: e => { r.name = e.target.value; save(); } })),
+      el('label', { class: 'field' }, 'מספר מחזור', el('input', { type: 'number', min: '1', inputmode: 'numeric', value: String(r.num), oninput: e => { const v = parseInt(e.target.value, 10); if (v > 0) { r.num = v; save(); } } })),
       el('label', { class: 'field' }, 'תאריך', el('input', { type: 'date', value: r.date || '', onchange: e => { r.date = e.target.value; save(); } }))),
     el('div', { class: 'row' },
       el('button', { onclick: () => copyText(roundText(r)), disabled: !r.games.length }, '📋 העתק את כל המשחקים'),
@@ -396,19 +435,7 @@ function renderRound(main, r) {
       confirmBtn('מחק מחזור', () => { db.rounds = db.rounds.filter(x => x !== r); save(); location.hash = 'rounds'; }, 'small danger w'))));
 
   // attendance for the whole round
-  const att = new Set(r.attending);
-  const open = ui.attOpen[r.id] ?? !r.games.length;
-  const det = el('details', { class: 'card att', open },
-    el('summary', {}, el('h3', {}, `מי מגיע למחזור (${roster().filter(p => att.has(p.id)).length}/${roster().length})`),
-      el('div', { class: 'row', onclick: e => e.preventDefault() },
-        el('button', { class: 'small w', onclick: () => { r.attending = roster().map(p => p.id); save(); render(); } }, 'כולם'),
-        el('button', { class: 'small w', onclick: () => { r.attending = []; save(); render(); } }, 'אף אחד'))),
-    el('div', { class: 'chips' }, roster().map(p => el('button', {
-      class: 'chip toggle w-click' + (att.has(p.id) ? ' on' : ''), type: 'button',
-      onclick: () => { r.attending = att.has(p.id) ? r.attending.filter(x => x !== p.id) : r.attending.concat(p.id); save(); render(); },
-    }, numBadge(p), p.short || p.name, p.foreign ? el('span', { class: 'tag' }, 'זר') : null))));
-  det.addEventListener('toggle', () => { ui.attOpen[r.id] = det.open; });
-  main.append(det);
+  main.append(canEdit() ? attendanceAdmin(r) : rsvpPanel(r));
 
   // games side by side
   const sec = el('section', { class: 'card' },
@@ -425,10 +452,51 @@ function renderRound(main, r) {
   if (r.games.length) main.append(statsSection(r));
 }
 
-function moveGame(r, i, d) { const j = i + d; if (j < 0 || j >= r.games.length) return; [r.games[i], r.games[j]] = [r.games[j], r.games[i]]; save(); render(); }
+const ME_KEY = 'team-lineups-me';
+function getMe() { try { return localStorage.getItem(ME_KEY) || ''; } catch (e) { return ''; } }
+function setMe(id) { try { localStorage.setItem(ME_KEY, id); } catch (e) { /* ignore */ } }
+function rsvpCounts(r) {
+  const m = rsvpOf(r), ids = roster().map(p => p.id);
+  return { yes: ids.filter(id => m[id] === true), no: ids.filter(id => m[id] === false), none: ids.filter(id => m[id] === undefined) };
+}
+// manager view: tap a player to switch between coming / not coming
+function attendanceAdmin(r) {
+  const m = rsvpOf(r), c = rsvpCounts(r);
+  const open = ui.attOpen[r.id] ?? !r.games.length;
+  const det = el('details', { class: 'card att', open },
+    el('summary', {}, el('h3', {}, `מי מגיע למחזור · ✓ ${c.yes.length} · ✗ ${c.no.length} · ? ${c.none.length}`),
+      el('div', { class: 'row', onclick: e => e.preventDefault() },
+        el('button', { class: 'small w', onclick: () => setRsvp(r, c.none, true) }, 'סמן מגיעים את מי שלא ענה'))),
+    el('div', { class: 'muted small', style: 'margin-bottom:8px' }, 'השחקנים יכולים לסמן בעצמם מהקישור. לחיצה על שחקן מחליפה בין מגיע ללא מגיע.'),
+    el('div', { class: 'chips' }, roster().map(p => el('button', {
+      class: 'chip rsvp w-click ' + (m[p.id] === true ? 'yes' : m[p.id] === false ? 'no' : 'none'), type: 'button',
+      onclick: () => setRsvp(r, [p.id], m[p.id] !== true),
+    }, el('span', { class: 'mark' }, m[p.id] === true ? '✓' : m[p.id] === false ? '✗' : '?'), numBadge(p), p.short || p.name))));
+  det.addEventListener('toggle', () => { ui.attOpen[r.id] = det.open; });
+  return det;
+}
+// player view: pick your name once, then mark coming / not coming
+function rsvpPanel(r) {
+  const me = getMe(), m = rsvpOf(r), c = rsvpCounts(r);
+  const sel = el('select', { class: 'ro-ok', 'aria-label': 'השם שלי', onchange: e => { setMe(e.target.value); render(); } },
+    el('option', { value: '' }, 'בחר את השם שלך…'),
+    roster().map(p => el('option', { value: p.id, selected: p.id === me }, p.name + (p.num ? ' · ' + p.num : ''))));
+  const mine = m[me];
+  return el('section', { class: 'card rsvp-panel' },
+    el('h3', { style: 'margin-bottom:10px' }, `מגיע ל${roundTitle(r)}?` + (r.date ? ' · ' + fmtDate(r.date) : '')),
+    el('div', { class: 'row' }, sel),
+    me ? el('div', { class: 'rsvp-btns' },
+      el('button', { class: 'big yes' + (mine === true ? ' on' : ''), onclick: () => setRsvp(r, [me], true) }, '✓ מגיע'),
+      el('button', { class: 'big no' + (mine === false ? ' on' : ''), onclick: () => setRsvp(r, [me], false) }, '✗ לא מגיע')) : null,
+    me ? el('div', { class: 'muted small' }, mine === true ? 'סימנת שאתה מגיע 👍' : mine === false ? 'סימנת שאתה לא מגיע' : 'עוד לא סימנת') : null,
+    el('div', { class: 'rsvp-lists' },
+      el('div', {}, el('b', {}, `✓ מגיעים (${c.yes.length}): `), names(c.yes) || '—'),
+      el('div', {}, el('b', {}, `✗ לא מגיעים (${c.no.length}): `), names(c.no) || '—'),
+      el('div', { class: 'muted' }, `? עוד לא ענו (${c.none.length}): `, names(c.none) || '—')));
+}
 function dupGame(r, g) {
-  const c = clone(g); c.id = uid('g'); c.name = 'משחק ' + (r.games.length + 1); c.result = { us: '', them: '' }; c.stats = {}; c.mvp = null;
-  r.games.splice(r.games.indexOf(g) + 1, 0, c); save(); render(); toast('המשחק שוכפל עם אותו הרכב');
+  const c = clone(g); c.id = uid('g'); c.num = nextNum(r.games); c.result = { us: '', them: '' }; c.stats = {}; c.mvp = null;
+  r.games.push(c); sortGames(r); save(); render(); toast('המשחק שוכפל עם אותו הרכב');
 }
 function gameCard(r, g, i) {
   const subs = g.lineup.subs.filter(byId);
@@ -436,10 +504,8 @@ function gameCard(r, g, i) {
   pitch.classList.add('clickable'); pitch.title = 'לחץ לעריכה'; pitch.addEventListener('click', () => openEditor(r, g));
   return el('div', { class: 'lcard' },
     el('div', { class: 'lc-head' },
-      el('div', {}, el('b', {}, g.name), g.opponent.trim() ? el('span', { class: 'muted small' }, ' נגד ' + g.opponent.trim()) : null, ' ', resultBadge(g)),
-      el('div', { class: 'row', style: 'gap:2px' },
-        i > 0 ? el('button', { class: 'icon w', title: 'הזז קודימה', onclick: () => moveGame(r, i, -1) }, '→') : null,
-        i < r.games.length - 1 ? el('button', { class: 'icon w', title: 'הזז אחורה', onclick: () => moveGame(r, i, 1) }, '←') : null)),
+      el('div', {}, el('b', {}, gameName(g)), g.opponent.trim() ? el('span', { class: 'muted small' }, ' נגד ' + g.opponent.trim()) : null, ' ', resultBadge(g)),
+      el('span', { class: 'muted small' }, g.lineup.formation)),
     pitch,
     el('div', { class: 'subs-line' }, el('span', { class: 'muted' }, '🔄 חילופים: '), subs.length ? subs.map(nm).join(' · ') : el('span', { class: 'muted' }, 'אין')),
     el('div', { class: 'lc-actions' },
@@ -479,7 +545,7 @@ function statsSection(r) {
   updSum();
   return el('section', { class: 'card' },
     el('div', { class: 'sec-head' }, el('h3', {}, 'אחרי המשחק: תוצאה וסטטיסטיקה'), sumEl),
-    el('div', { class: 'tabs' }, r.games.map(x => el('button', { class: 'tab' + (x.id === tab ? ' on' : ''), onclick: () => { ui.statsTab[r.id] = x.id; render(); } }, x.name, resultBadge(x)))),
+    el('div', { class: 'tabs' }, r.games.map(x => el('button', { class: 'tab' + (x.id === tab ? ' on' : ''), onclick: () => { ui.statsTab[r.id] = x.id; render(); } }, gameName(x), resultBadge(x)))),
     el('div', { class: 'score' }, el('b', {}, db.team.name), scoreIn('us'), el('b', {}, ':'), scoreIn('them'), el('b', {}, g.opponent.trim() || 'יריב')),
     ids.length ? el('div', { class: 'table-wrap' }, el('table', {},
       el('thead', {}, el('tr', {}, el('th', { class: 'name' }, 'שחקן'), el('th', {}, 'תפקיד'),
@@ -492,9 +558,10 @@ function statsSection(r) {
 function newGame(r) {
   const last = r.games[r.games.length - 1];
   const slots = Array(7).fill(null);
-  const gk = roster().find(p => p.gk && (r.attending.includes(p.id) || !r.attending.length));
+  const coming = att(r);
+  const gk = roster().find(p => p.gk && (coming.includes(p.id) || !coming.length));
   if (gk) slots[0] = gk.id;
-  return { id: uid('g'), name: 'משחק ' + (r.games.length + 1), opponent: '', lineup: { formation: last ? last.lineup.formation : '3-2-1', slots, subs: [] }, result: { us: '', them: '' }, stats: {}, mvp: null };
+  return { id: uid('g'), num: nextNum(r.games), opponent: '', lineup: { formation: last ? last.lineup.formation : '3-2-1', slots, subs: [] }, result: { us: '', them: '' }, stats: {}, mvp: null };
 }
 function openEditor(r, g) {
   if (!canEdit()) { toast('צריך להתחבר כדי לערוך'); return; }
@@ -506,13 +573,15 @@ function openEditor(r, g) {
 function closeEditor() { editing = null; const o = $('#editor'); if (o) o.remove(); document.body.classList.remove('noscroll'); }
 function saveEditor() {
   const E = editing, r = roundById(E.rid), g = E.g;
-  g.name = (g.name || '').trim() || 'משחק';
+  g.num = parseInt(g.num, 10) > 0 ? parseInt(g.num, 10) : nextNum(r.games.filter(x => x.id !== g.id));
+  if (r.games.some(x => x.id !== g.id && x.num === g.num)) toast(`שים לב: יש כבר משחק ${g.num} במחזור`);
   // stats of players who left the lineup are dropped
   const inGame = new Set([...g.lineup.slots.filter(Boolean), ...g.lineup.subs]);
   Object.keys(g.stats).forEach(id => { if (!inGame.has(id)) delete g.stats[id]; });
   if (g.mvp && !inGame.has(g.mvp)) g.mvp = null;
   const i = r.games.findIndex(x => x.id === g.id);
   if (i >= 0) r.games[i] = g; else r.games.push(g);
+  sortGames(r); ui.statsTab[r.id] = g.id;
   save(); closeEditor(); render();
   const n = g.lineup.slots.filter(Boolean).length;
   toast(n < 7 ? `נשמר (חסרים ${7 - n} על המגרש)` : 'ההרכב נשמר');
@@ -574,22 +643,22 @@ function renderEditor() {
   const dirty = JSON.stringify(g) !== E.orig;
   const others = r.games.filter(x => x.id !== g.id);
   const usage = usageOf(others);
-  const attSet = new Set(r.attending);
+  const attSet = new Set(att(r));
   const used = new Set([...l.slots.filter(Boolean), ...l.subs]);
-  const pool = roster().filter(p => !used.has(p.id) && (E.showAll || !r.attending.length || attSet.has(p.id)));
+  const pool = roster().filter(p => !used.has(p.id) && (E.showAll || !attSet.size || attSet.has(p.id)));
 
   const chip = (p, extra) => {
-    const st = (usage[p.id] || {}).s || 0;
+    const st = (usage[p.id] || {}).s || 0, sb = (usage[p.id] || {}).b || 0;
     return el('button', {
       type: 'button', title: p.name, onclick: () => edClickPlayer(p.id),
       class: 'chip' + (E.sel && E.sel.t === 'p' && E.sel.id === p.id ? ' sel' : '') + (others.length && st === 0 ? ' zero' : '') + (extra || ''),
-    }, numBadge(p), p.short || p.name, p.foreign ? el('span', { class: 'tag' }, 'זר') : null, others.length ? el('span', { class: 'cnt' }, 'פתח ' + st) : null);
+    }, numBadge(p), p.short || p.name, p.foreign ? el('span', { class: 'tag' }, 'זר') : null, others.length ? el('span', { class: 'cnt' }, `פתח ${st} · חילוף ${sb}`) : null);
   };
   const canSub = E.sel && (E.sel.t === 'p' ? !l.subs.includes(E.sel.id) : !!l.slots[E.sel.i]);
 
   ov.append(
     el('div', { class: 'ed-bar' },
-      el('input', { class: 'ed-name', value: g.name, 'aria-label': 'שם המשחק', oninput: e => { g.name = e.target.value; } }),
+      el('label', { class: 'ed-num' }, 'משחק', el('input', { type: 'number', min: '1', inputmode: 'numeric', value: String(g.num), 'aria-label': 'מספר משחק', oninput: e => { g.num = e.target.value; } })),
       el('input', { class: 'ed-opp', value: g.opponent, placeholder: 'יריב (לא חובה)', 'aria-label': 'יריב', oninput: e => { g.opponent = e.target.value; } }),
       el('select', { 'aria-label': 'מערך', onchange: e => { l.formation = e.target.value; renderEditor(); } },
         Object.keys(FORMATIONS).map(k => el('option', { value: k, selected: k === l.formation }, k))),
@@ -607,7 +676,7 @@ function renderEditor() {
           el('div', { class: 'pool-head' }, el('h4', {}, `מגיעים פנויים (${pool.length})`),
             el('label', { class: 'muted small' }, el('input', { type: 'checkbox', checked: E.showAll, onchange: e => { E.showAll = e.target.checked; renderEditor(); } }), 'הצג גם מי שלא מגיע')),
           pool.length ? el('div', { class: 'chips' }, pool.map(p => chip(p, attSet.has(p.id) ? '' : ' absent'))) : el('div', { class: 'muted' }, 'כל המגיעים משובצים ✓')),
-        others.length ? el('div', { class: 'muted small' }, '"פתח X" = בכמה משחקים אחרים במחזור השחקן כבר פתח. כתום = עוד לא פתח במחזור.') : null)));
+        others.length ? el('div', { class: 'muted small' }, '"פתח X · חילוף Y" = בכמה משחקים אחרים במחזור השחקן כבר פתח / היה בחילופים. כתום = עוד לא פתח במחזור.') : null)));
   ov.querySelector('.ed-body').scrollTop = keepScroll;
 }
 
@@ -616,7 +685,7 @@ function seasonStats() {
   const s = {};
   roster().forEach(p => { s[p.id] = { p, att: 0, games: 0, starts: 0, subs: 0, g: 0, a: 0, y: 0, r: 0, mvp: 0 }; });
   db.rounds.forEach(rd => {
-    rd.attending.forEach(id => { if (s[id]) s[id].att++; });
+    att(rd).forEach(id => { if (s[id]) s[id].att++; });
     rd.games.forEach(gm => {
       const u = usageOf([gm]);
       Object.entries(u).forEach(([id, x]) => { if (!s[id]) return; s[id].games++; if (x.s) s[id].starts++; else s[id].subs++; });
@@ -660,7 +729,7 @@ function renderStats(main) {
 function removePlayer(id) {
   db.players = db.players.filter(p => p.id !== id);
   db.rounds.forEach(r => {
-    r.attending = r.attending.filter(x => x !== id);
+    if (r.rsvp) delete r.rsvp[id];
     r.games.forEach(g => {
       g.lineup.slots = g.lineup.slots.map(x => x === id ? null : x); g.lineup.subs = g.lineup.subs.filter(x => x !== id);
       delete g.stats[id]; if (g.mvp === id) g.mvp = null;
@@ -819,7 +888,7 @@ async function buildImage(r, games) {
   x.textAlign = 'center'; x.textBaseline = 'middle';
   x.fillStyle = '#17211a'; x.font = '700 40px Rubik, sans-serif'; x.fillText('⚽ ' + db.team.name, c.width / 2, pad + 30);
   x.fillStyle = '#4c584e'; x.font = '500 26px Rubik, sans-serif';
-  x.fillText(r.name + (r.date ? '  ·  ' + fmtDate(r.date) : ''), c.width / 2, pad + 78);
+  x.fillText(roundTitle(r) + (r.date ? '  ·  ' + fmtDate(r.date) : ''), c.width / 2, pad + 78);
   let y = pad + head;
   for (let i = 0; i < rows; i++) {
     for (let k = 0; k < cols; k++) {
@@ -836,7 +905,7 @@ async function showImage(r, games) {
   openModal(el('div', { class: 'muted' }, 'מכין תמונה…'));
   const c = await buildImage(r, games);
   const blob = await new Promise(res => c.toBlob(res, 'image/png'));
-  const base = [db.team.name, r.name, r.date, games.length === 1 ? games[0].name : ''].filter(Boolean).join('-');
+  const base = [db.team.name, roundTitle(r), r.date, games.length === 1 ? gameName(games[0]) : ''].filter(Boolean).join('-');
   const fname = base.replace(/[\\/:*?"<>|\s]+/g, '-') + '.png';
   const url = URL.createObjectURL(blob);
   let file = null, canShare = false;
